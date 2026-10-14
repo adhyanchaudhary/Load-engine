@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-performance-guardrails"
+version = "0.1.0"
+description = "MCP performance preflight tools for AI coding agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["mcp>=2.3.0,<3", "pydantic>=2.12,<3", "psutil>=7,<8", "docker>=7.1,<8", "filelock>=3.16,<4"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guardrails"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+markers = ["docker_integration: opt-in tests requiring an approved local Docker image"]
