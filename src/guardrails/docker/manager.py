@@ -51,10 +51,40 @@ def operation(method):
     @wraps(method)
     def wrapped(*args, **kwargs) -> SandboxResult:
         try:
-            return method(*args, **kwargs)
+            result = method(*args, **kwargs)
+            if result.sandbox is not None:
+                try:
+                    from guardrails.persistence.indexer import ArtifactIndexer
+                    from guardrails.diagnostics.ownership import current_owner
+                    manager=args[0]
+                    ArtifactIndexer(manager.registry.directory).sandbox_observation(result.sandbox,
+                        current_owner(manager.registry.directory),result.error.message if result.error else None)
+                except Exception:
+                    pass  # Registry/JSON remain authoritative; explicit import reconciles history.
+            if method.__name__ in ('create','start','destroy'):
+                audit_operation(args[0],method.__name__,result,args,kwargs)
+            return result
         except HANDLED as exc:
-            return SandboxResult(ok=False, error=error_result(exc))
+            result=SandboxResult(ok=False, error=error_result(exc))
+            if method.__name__ in ('create','start','destroy'):
+                audit_operation(args[0],method.__name__,result,args,kwargs)
+            return result
     return wrapped
+
+
+def audit_operation(manager,action,result,args,kwargs):
+    """Record lifecycle outcomes from every interface without exposing daemon errors."""
+    try:
+        from guardrails.persistence.database import database_for,utc
+        from guardrails.diagnostics.ownership import current_owner
+        target=result.sandbox.sandbox_id if result.sandbox else kwargs.get('sandbox_id') or (args[1] if len(args)>1 and action!='create' else None)
+        with database_for(manager.registry.directory).connect(write=True) as con:
+            con.execute('INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?)',
+                (str(uuid4()),current_owner(manager.registry.directory),utc(),'backend','sandbox_'+action,target,
+                 'COMPLETED' if result.ok else 'FAILED',result.error.code if result.error else None))
+    except Exception:
+        import logging
+        logging.warning('Lifecycle audit unavailable; retain private registry and inspect local database access.')
 
 
 class SandboxManager:
@@ -201,6 +231,7 @@ class SandboxManager:
                     sandbox_id=str(uuid4()), created_at=now,
                     expires_at=now + timedelta(seconds=config.timeout_seconds),
                     owner=data.owner, nonce=str(uuid4()), config=config, approved=approved,
+                    repair_session_id=getattr(self,"repair_session_id",None),
                 )
                 data.entries[entry.sandbox_id] = entry
                 self.registry.save(data)

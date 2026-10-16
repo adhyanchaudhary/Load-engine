@@ -1,0 +1,2 @@
+from guardrails.persistence.repositories.history import HistoryRepository
+SandboxRepository=HistoryRepository

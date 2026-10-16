@@ -1,6 +1,6 @@
 # AI-Agent Performance Guardrails
 
-A performance preflight utility for AI coding agents, not a replacement for production-scale load testing. The local stdio MCP server exposes health/configuration tools (Milestone 1), restricted Docker lifecycle tools (Milestone 2), automated isolated HTTP benchmarks with Grafana k6 (Milestone 3), and evidence-backed regression investigation (Milestone 4). External AI diagnosis, autonomous source modification, TinyFish, SQLite history, and Streamlit remain outside the current implementation.
+A performance preflight utility for AI coding agents, not a replacement for production-scale load testing. The local stdio MCP server exposes health/configuration tools (Milestone 1), restricted Docker lifecycle tools (Milestone 2), automated isolated HTTP benchmarks with Grafana k6 (Milestone 3), and evidence-backed regression investigation (Milestone 4). Milestone 5 adds bounded verification of agent-authored repair commits. Milestone 6 adds SQLite history and a six-page Streamlit control center. External AI services, automatic merge/deploy and TinyFish remain outside the current implementation.
 
 ## Prerequisites and installation
 
@@ -485,7 +485,7 @@ The four new MCP tools are:
 No external LLM, paid API, managed observability server, source modification, network
 request or container operation is performed by these diagnostic tools. Their only
 writes are new local diagnostic reports. Benchmark execution remains an explicit
-Milestone 3 operation. Milestone 5 repair loops and Milestone 6 UI are not implemented.
+Milestone 3 operation. Milestone 5 now adds the controlled candidate workflow below; Milestone 6 UI is not implemented.
 
 ### Historical telemetry and ownership
 
@@ -725,5 +725,316 @@ and external host contention, unmeasured dependencies, log signature false posit
 and absence of query plans/source locations. Baseline diffs are heuristic, not causal
 proof. The next milestone should consume reports through an explicit, reviewable
 change/proposal workflow, with source authorization, constrained edits, validation,
-rollback and repeatable before/after measurements. Those Milestone 5 actions are not
-implemented here.
+rollback and repeatable before/after measurements. The Milestone 5 implementation
+below supplies isolated verification and human-review finalization without automatic source changes.
+
+## Milestone 5: verified repair candidates
+
+The connected coding agent is the reasoning and patch-generation engine. The server
+provides a controlled loop from an owned diagnostic report through immutable candidate
+registration, isolated correctness checks, repeated k6 benchmarks and a verdict. It
+never calls a paid LLM or accepts executable patch text through MCP. Follow
+[`docs/agent-repair-workflow.md`](docs/agent-repair-workflow.md) for the complete agent loop.
+
+### Architecture and lifecycle
+
+`RepairManager` delegates to `CandidateResolver` (Git object snapshots),
+`CorrectnessVerifier` (fixed container recipes), `RepairBenchmarker` (existing k6),
+`RepairEvaluator` (measured acceptance), session transitions, ownership-tagged cleanup
+and atomic `RepairStore`. The existing SandboxManager, image controls, resource
+limits, internal networks, benchmark schemas, diagnostic ownership and comparison
+logic are reused. No new dependencies are required.
+
+| MCP tool | Inputs | Effect |
+| --- | --- | --- |
+| `create_repair_session` | diagnostic report UUID, approved project UUID, optional maximum attempts | Validate provenance/baseline and create a persistent bounded session |
+| `register_repair_candidate` | session UUID, full candidate commit hash | Validate ancestry/allowed changes and save an immutable source snapshot |
+| `verify_repair_candidate` | session UUID, candidate UUID | Isolated build → correctness → warmup/trials → comparison → verdict → cleanup |
+| `get_repair_status` | session UUID | Bounded candidates, attempts, correctness, comparisons, reasons and audit references |
+| `finalize_repair_session` | session UUID, candidate UUID, `ACCEPT_FOR_REVIEW` or `REJECT` | Recheck evidence and finalize for review, or explicitly reject |
+
+Session transitions are enforced. Normal flow is `CREATED → AWAITING_CANDIDATE →
+VERIFYING → VERIFIED → COMPLETED`. Failed measured candidates move the session to
+`REJECTED`; a new candidate can return it to `AWAITING_CANDIDATE` while attempts remain.
+Infrastructure uncertainty produces candidate `INCONCLUSIVE` and session `REJECTED`
+with reasons, allowing a consciously chosen new attempt. Cancellation is terminal
+`CANCELLED`. Unrecoverable policy/operational problems can use `FAILED`.
+Explicit final rejection completes the session without an accepted candidate.
+
+There are three attempts by default, at most five. Registration consumes an attempt;
+failed infrastructure does not refund it. Duplicate revisions and automatic retries
+are refused. One registered candidate is pending at a time. Defaults allow two active
+sessions and one verification globally (configurable to four/two respectively). File
+locks cover session mutations, verification and global admission across processes
+sharing the same private state directory. Finalization is idempotent for the same
+candidate/decision and rejects contradictory repeated decisions.
+
+### Approved project and recipe setup
+
+The MVP supports **reviewed local Python source applications**, not arbitrary remote
+repositories, dependency installation or Dockerfile builds. An operator provisions
+and reviews the runtime and k6 images locally. The fixed offline build procedure may
+compile/check Python source; it does not create a new Docker image or carry generated
+build artifacts into the runtime. Applications requiring native/dependency builds or
+runtime-generated build outputs need a stronger separately designed recipe adapter.
+No fallback host execution is permitted.
+
+Set `GUARDRAILS_REPAIR_POLICY_FILE` to a private administrator-controlled JSON file.
+Its paths, recipes, images and limits never come from MCP arguments. Example template:
+
+```json
+{
+  "schema_version": 1,
+  "maximum_active_sessions": 2,
+  "verification_concurrency": 1,
+  "projects": {
+    "11111111-1111-4111-8111-111111111111": {
+      "workspace": "/absolute/operator-approved/project",
+      "baseline_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_image": {
+        "image_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "user": "65534:65534",
+        "entrypoint": ["python"]
+      },
+      "recipe": {
+        "version": "python-fixture-v1",
+        "kind": "offline-python-source-v1",
+        "python_executable": "python",
+        "build_command": ["python", "-I", "-m", "compileall", "-q", "."],
+        "test_command": ["python", "-B", "-m", "unittest", "discover", "-s", "tests", "-v"],
+        "application_command": ["python", "-B", "app.py"],
+        "port": 8080,
+        "minimum_tests": 3,
+        "build_timeout_seconds": 20,
+        "test_timeout_seconds": 30,
+        "workspace_mb": 16
+      },
+      "allowed_changes": ["app.py", "src/"],
+      "protected_paths": ["tests/"],
+      "dataset_id": "reviewed-fixture-v1",
+      "application_cpus": 0.5,
+      "application_memory_mb": 256,
+      "application_pids_limit": 64,
+      "evaluation": {
+        "repetitions": 3,
+        "warmup_seconds": 1,
+        "improvement_percent": 15,
+        "maximum_throughput_drop_percent": 5,
+        "maximum_error_increase_percentage_points": 0,
+        "maximum_p99_increase_percent": 5,
+        "maximum_trial_spread_percent": 20
+      },
+      "baseline_workload": {
+        "endpoint_path": "/",
+        "vus": 2,
+        "duration_seconds": 3,
+        "p95_latency_budget_ms": 250.0,
+        "error_rate_budget": 0.01
+      }
+    }
+  }
+}
+```
+
+Replace placeholders only after review. The `runtime_image` approval identifies the
+pinned local Python runtime; the service replaces its executable arguments with the
+fixed trusted bootstrap. All recipe argv must start with the configured Python
+executable, and inline `-c` recipe commands are rejected. The bootstrap itself is
+service-owned. It invokes the same container Python executable by absolute path.
+The existing `GUARDRAILS_POLICY_FILE` supplies the separately approved k6 image/limits.
+
+Protect all correctness tests, fixtures, expected outputs, test configuration and
+helper code that could weaken checks. Only allow source paths that the agent needs.
+Do not put credentials or sensitive datasets in the approved source repository. An
+operator-approved recipe is executable authority: review it rather than accepting a
+repository's Dockerfile, build script or dependency hooks automatically.
+
+The source repository must be a clean, nonsymlink, non-shallow standalone Git clone.
+Mutable branch names, abbreviated hashes, external object stores, submodules,
+symlinks, `.env` files, unfinished merges/rebases and unsafe paths are rejected. Full
+commit hashes must resolve locally and descend from the approved baseline. Reading
+uses bounded Git commands with hooks, fsmonitor, replacement objects and network
+protocols disabled. No checkout, reset, clean, fetch, merge, push or Git hook is run by
+repair tools. Uncommitted agent edits must first be committed through the agent's
+separate authorized workspace capabilities. SHA-256-format Git repositories and linked
+Git worktrees are not supported in this MVP. Repair verification currently requires a
+POSIX/Linux host for bounded Git pipe reads; native Windows execution is unverified
+and should use a dedicated Linux/WSL runner.
+
+Snapshot bounds are 100 regular source files, 512 KiB per file, 2 MiB total file data
+and a 3 MiB tar archive. Archives are reconstructed from Git blobs with fixed metadata,
+hashed and revalidated against the commit before execution. The developer's active
+working tree is never mounted, overwritten, checked out or reset.
+
+### Prepare a comparable baseline
+
+Older benchmarks may not identify an immutable source revision or trusted recipe.
+Do not retrofit missing proof. Execute a fresh baseline through the approved recipe:
+
+```sh
+export GUARDRAILS_REPAIR_POLICY_FILE=/private/repair-policy.json
+uv run python -m guardrails.repair benchmark-baseline 11111111-1111-4111-8111-111111111111
+```
+
+This operator-only command runs build and correctness checks in managed containers,
+then warmup and measured baseline trials. It returns the actual median-p95 trial as
+an observed representative baseline, preserving individual trial IDs and stage
+results. It does not invent an aggregate benchmark record. Diagnose that returned
+test UUID through Milestone 4 and pass the resulting report UUID to
+`create_repair_session`. The report's own `test_id` is the repair baseline; an optional
+earlier diagnostic comparison baseline is not silently substituted.
+
+Baseline records must match the approved project UUID, full baseline commit and
+recipe digest/version. The candidate uses the identical endpoint, GET method, VUs,
+duration, budgets and fixed k6 scenario; no tool parameter can replace them. Effective
+application CPU/RAM, runner CPU/RAM/PIDs/image, dataset, application configuration,
+architecture and environment must compare successfully. The runtime image must also
+match. Policy changes after session creation require a new session.
+
+### Isolation, stage verification and evaluation
+
+The service-owned bootstrap receives a bounded immutable archive on attached stdin,
+validates it again inside the container, and materializes it under `/tmp` in a bounded
+8–64 MiB noexec/nosuid/nodev tmpfs. There is no source bind mount and no Docker socket,
+credential, production-data or host-workspace mount. The root filesystem remains read
+only; containers remain non-root, unprivileged, capability-dropped, no-new-privileges,
+with CPU/RAM/swap/PID limits and bounded Docker logging. Ordinary Milestone 2 images
+retain the original no-writable-mount policy. Only an explicitly trusted ephemeral
+workspace approval permits the exact bounded tmpfs, which inspection verifies.
+
+Build/test containers use disabled networking and `network_mode=none`. Application
+containers join only their owned internal test bridge with the current approved k6
+runner. There are no host ports or public targets. No Dockerfiles, image pulls, package
+installs or build hooks execute automatically. Stage container creation, delivery,
+execution, log collection and cleanup use a 15-second startup budget and bounded SDK calls/timeouts; an in-flight
+bounded call can add to a nominal deadline.
+
+`CorrectnessVerifier` records recipe version/digest, exit code and bounded redacted
+stdout/stderr (8 KiB each, explicitly untrusted). A failing build/test rejects the
+candidate and prevents benchmarks. Missing runner, timeout, OOM, absent exit status
+or missing/nonzero test counts produce `INCONCLUSIVE`, never PASS. Unittest `Ran N
+tests` and pytest `N passed` summaries are recognized. The count is evidence reported
+by the trusted procedure, not cryptographic proof that hostile code behaved honestly.
+
+Performance verification uses one separately recorded warmup (0–3 seconds, default 1)
+and 1–3 measured trials (default 3). The exact repeated workload must fit the existing
+300-second application lifetime; otherwise verification refuses it as inconclusive
+rather than silently shortening the workload. Per-run IDs, compatibility, budgets,
+summary statistics and rejection reasons persist. A candidate is `VERIFIED` only when:
+
+- Build and correctness PASS with completed, nonzero trusted-test evidence.
+- All requested trials complete, required metrics exist and baseline compatibility is
+  full; invalid/missing raw summaries cannot support acceptance.
+- Every mandatory absolute performance budget PASSes.
+- Median p95 improves by at least 15% by default.
+- Every trial respects protected throughput (default at most 5% decrease), error rate
+  (default no increase) and p99 (default at most 5% increase).
+- Candidate p95 spread `(max-min)/median` is no more than 20% by default.
+
+Defaults are engineering heuristics, not universal statistical standards. A single
+baseline or a small repeated fixture does not establish significance, production
+safety, complete API correctness or stable production behavior. Passing a budget
+without meaningful improvement is REJECTED; incomplete/incompatible/unstable evidence
+is INCONCLUSIVE. Observed k6 throttling/OOM retains existing inconclusive safeguards.
+Enough runner CPU headroom is needed for meaningful integration measurements.
+Repeated baseline measurements are checked for p95 spread and matching environments
+before verification and again at acceptance. Missing repetition evidence is explicitly
+reported as a single-baseline limitation.
+
+`ACCEPT_FOR_REVIEW` reloads persisted owned measurements, rechecks source/recipe and
+comparison evidence, and requires VERIFIED. It means **verified candidate ready for
+review**, never production safe. No repair operation merges, pushes or deploys.
+
+### Persistence, cancellation and recovery
+
+Version-1 sessions, candidates, source digests/archives, stage results, verification
+reports, decisions, timestamps and audit records persist under
+`$GUARDRAILS_STATE_DIR/repair/`. JSON is atomic and bounded to 1 MiB per artifact;
+regular-file reads and owner/UUID validation follow the existing persistence pattern.
+Results remain after containers are removed. Archive retention is intentional audit
+retention; it is not a writable checkout. Keep this directory private, outside the
+approved repository and all containers. Milestone 6 also indexes this evidence into SQLite for dashboard queries.
+
+Cancellation signals the worker, waits for its bounded cleanup and persists a
+cancelled/inconclusive outcome. Each repair container has a durable session tag in
+both its private registry entry and ownership labels. Cleanup only selects this tag,
+then reuses SandboxManager's ID/owner/nonce checks. It never removes unrelated
+containers, images, volumes, branches or source files. Failed cleanup prevents
+acceptance and reports remaining managed sandbox IDs. Hard kills cannot run finally;
+startup recovery (when repair policy is configured) and this operator command reconcile
+abandoned work without rerunning it:
+
+```sh
+uv run python -m guardrails.repair recover
+```
+
+Recovery respects active session locks. Interrupted candidates become INCONCLUSIVE;
+there is no automatic optimization loop, test retry or branch rollback. The developer's
+workspace never needs rollback because verification never modifies it.
+
+### Tests and security assumptions
+
+```sh
+uv run pytest -q
+GUARDRAILS_DOCKER_INTEGRATION=1 \
+GUARDRAILS_TEST_IMAGE=local-smoke \
+GUARDRAILS_HTTP_TEST_IMAGE=http-fixture \
+uv run pytest -q -m docker_integration
+```
+
+The real repair integration creates a local fixture Git history with a deliberately
+inefficient but correct HTTP endpoint and a candidate removing redundant delay.
+Protected correctness tests and actual before/after k6 trials run inside approved
+local Python/k6 containers; no project code runs on the host and no images are pulled.
+The test verifies improvement, finalization, restart retrieval, cleanup and unchanged
+original source. Unit tests use synthetic measurement data clearly identified as such.
+
+Docker is not a complete boundary for arbitrary malicious repositories. Use a dedicated
+runner or stronger isolation before executing general untrusted repositories in
+production. Trusted assumptions include the operator policy, approved baseline/tests,
+local runtime/daemon, private state directory and Git installation. Internal networking
+is not a firewall against deliberately exposed host/daemon services. Test coverage and
+log-summary parsing can be gamed by hostile code; a VERIFIED result is a review aid,
+not proof of semantic equivalence or adversarial safety. Rootless/VM isolation, stronger
+external correctness oracles and measured dataset provisioning are future extensions.
+
+Milestone 6 adds the local Streamlit control center described below. Deployment integration and full CI/CD remain future work.
+
+
+## Milestone 6 — Local control center
+
+From the repository root, use the same private state directory and approved image
+policy as the MCP server. The dashboard reuses those managers, policies and ownership
+checks. No images are pulled, and no external benchmark targets are accepted.
+
+```sh
+uv sync --locked
+# Set these to your existing operator-owned paths:
+export GUARDRAILS_STATE_DIR=/absolute/private/guardrails-state
+export GUARDRAILS_POLICY_FILE=/absolute/private/approved-images.json
+# Optional: existing approved repair policy
+# export GUARDRAILS_REPAIR_POLICY_FILE=/absolute/private/repair-policy.json
+uv run python -m guardrails.persistence import
+uv run streamlit run src/guardrails/dashboard/app.py
+```
+
+Open http://127.0.0.1:8501. Image policy is optional for viewing history; creating
+sandboxes requires approved locally available images. Repair history remains visible
+without repair policy; new repair sessions and verification require that policy.
+See [control center architecture and operations](docs/control-center.md).
+
+The six native navigation pages provide overview, test execution, benchmark history,
+diagnostics, repair history and sandbox management. Tests run in a bounded background
+worker; reruns do not resubmit completed form intents. History exports contain the
+currently filtered, bounded page. Imports are explicit through the command above or
+the sidebar; source JSON and ownership receipts are retained intact.
+
+```sh
+uv run pytest -q -m 'not docker_integration'
+# Requires operator-approved local fixture images and sufficient k6 CPU headroom:
+GUARDRAILS_DOCKER_INTEGRATION=1 uv run pytest -q -m docker_integration
+```
+
+The default bind is loopback only. Localhost is not authentication. Remote hosting,
+authentication, authorization, stronger isolation and CI/CD belong to later production
+hardening; this milestone does not implement remote multiuser access.

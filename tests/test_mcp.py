@@ -9,7 +9,8 @@ from guardrails.server import mcp
 EXPECTED_TOOLS = {"health_check", "get_system_info", "validate_test_config", "check_docker", "create_sandbox", "start_sandbox",
                   "inspect_sandbox", "get_sandbox_logs", "destroy_sandbox", "prepare_test_environment", "run_performance_test",
                   "get_performance_results", "evaluate_performance_budget", "analyze_performance", "compare_performance_tests",
-                  "get_diagnostic_report", "get_diagnostic_context"}
+                  "get_diagnostic_report", "get_diagnostic_context", "create_repair_session", "register_repair_candidate",
+                  "verify_repair_candidate", "get_repair_status", "finalize_repair_session"}
 VALID = dict(cpus=1.0, memory_mb=512, vus=10, duration_seconds=30)
 
 

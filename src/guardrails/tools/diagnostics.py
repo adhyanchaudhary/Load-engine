@@ -4,7 +4,9 @@ from guardrails.diagnostics.service import DiagnosticService
 from guardrails.diagnostics.models import DiagnosticInput, AnalysisSummary, Comparison, DiagnosticReport, DiagnosticContext
 
 
-def get_service():return DiagnosticService(get_manager().registry.directory)
+def get_service():
+    from guardrails.application import services_for
+    return services_for(get_manager()).diagnostic_service
 
 
 def analyze_performance(test_id: str, baseline_test_id: str | None = None) -> AnalysisSummary:

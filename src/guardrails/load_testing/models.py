@@ -85,6 +85,8 @@ class ResourceUsage(BaseModel):
 
 class RunMetadata(BaseModel):
     schema_version: Literal[1] = 1
+    test_recipe_version: str | None = None
+    test_recipe_digest: str | None = None
     workload_model: Literal["constant-vus"] = "constant-vus"
     application_identity: str | None = None
     application_version: str | None = None

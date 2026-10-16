@@ -8,7 +8,16 @@ version = "0.1.0"
 description = "MCP performance preflight tools for AI coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["mcp>=2.3.0,<3", "pydantic>=2.12,<3", "psutil>=7,<8", "docker>=7.1,<8", "filelock>=3.16,<4"]
+dependencies = [
+    "mcp>=2.3.0,<3",
+    "pydantic>=2.12,<3",
+    "psutil>=7,<8",
+    "docker>=7.1,<8",
+    "filelock>=3.16,<4",
+    "streamlit>=1.45,<2",
+    "pandas>=2.2,<4",
+    "plotly>=6,<7",
+]
 
 [dependency-groups]
 dev = ["pytest>=8,<10"]

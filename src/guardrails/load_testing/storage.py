@@ -23,6 +23,8 @@ class ResultStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(name, self._path(test_id, suffix))
+            from guardrails.persistence.indexer import index_write
+            index_write(self._path(test_id, suffix))
         finally:
             if os.path.exists(name):
                 os.unlink(name)

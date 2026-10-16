@@ -7,7 +7,8 @@ from guardrails.docker.models import DockerStatus, SandboxResult
 
 @lru_cache(maxsize=1)
 def get_manager() -> SandboxManager:
-    return SandboxManager.from_environment()
+    from guardrails.application import get_application_services
+    return get_application_services().sandbox_manager
 
 
 def check_docker() -> DockerStatus:

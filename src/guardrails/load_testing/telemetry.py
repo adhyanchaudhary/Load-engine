@@ -13,7 +13,7 @@ def capture_metadata(entry, policy, info):
     a = entry.approved
     architecture = info.get('Architecture')
     environment = {k:info.get(k) for k in ('ID', 'Architecture', 'OSType', 'ServerVersion', 'NCPU', 'MemTotal')}
-    return RunMetadata(application_identity=a.application_identity or entry.config.image,
+    return RunMetadata(test_recipe_version=a.test_recipe_version,test_recipe_digest=a.test_recipe_digest,application_identity=a.application_identity or entry.config.image,
         application_version=a.application_version, commit_identifier=a.commit_identifier, dataset_id=a.dataset_id,
         application_configuration_fingerprint=digest({'entrypoint':a.entrypoint,'command':a.command,'port':a.application_port}),
         architecture=architecture if isinstance(architecture,str) else None,

@@ -13,3 +13,8 @@ build/
 
 # Local benchmark diagnostics and temporary policies
 work/
+
+# Local SQLite state
+performance.db
+performance.db-wal
+performance.db-shm

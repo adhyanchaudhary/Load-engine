@@ -16,6 +16,10 @@ class SandboxConfig(BaseModel):
 
 class ApprovedImage(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    ephemeral_workspace_mb: int | None = Field(default=None, ge=8, le=64)
+    stdin_open: bool = False
+    test_recipe_version: str | None = None
+    test_recipe_digest: str | None = None
     application_identity: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
     application_version: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
     commit_identifier: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
@@ -63,6 +67,7 @@ class RegistryEntry(BaseModel):
     expires_at: datetime
     owner: str
     nonce: str
+    repair_session_id: str | None = None
     network_name: str | None = None
     network_id: str | None = None
     runner_name: str | None = None

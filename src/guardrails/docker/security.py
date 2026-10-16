@@ -11,7 +11,7 @@ LABEL_PREFIX = "io.ai-performance-guardrails"
 
 
 def ownership_labels(entry: RegistryEntry) -> dict[str, str]:
-    return {
+    return ({f"{LABEL_PREFIX}.repair_session": entry.repair_session_id} if entry.repair_session_id else {}) | {
         f"{LABEL_PREFIX}.managed": "true",
         f"{LABEL_PREFIX}.owner": entry.owner,
         f"{LABEL_PREFIX}.sandbox": entry.sandbox_id,
@@ -21,7 +21,7 @@ def ownership_labels(entry: RegistryEntry) -> dict[str, str]:
 
 def create_options(config: SandboxConfig, approved: ApprovedImage, entry: RegistryEntry) -> dict:
     memory = config.memory_mb * 1024**2
-    return dict(
+    options = dict(
         image=approved.image_id, entrypoint=approved.entrypoint, command=approved.command,
         user=approved.user, labels=ownership_labels(entry),
         privileged=False, cap_drop=["ALL"], security_opt=["no-new-privileges:true"],
@@ -33,6 +33,11 @@ def create_options(config: SandboxConfig, approved: ApprovedImage, entry: Regist
         volumes={}, mounts=[], ports={}, publish_all_ports=False,
         log_config=LogConfig(type="local", config={"max-size": "1m", "max-file": "1", "compress": "false"}),
     )
+    if approved.stdin_open:
+        options['stdin_open'] = True
+    if approved.ephemeral_workspace_mb is not None:
+        options['tmpfs'] = {'/tmp': f'rw,noexec,nosuid,nodev,size={approved.ephemeral_workspace_mb}m,mode=1777'}
+    return options
 
 
 def isolation_discrepancies(attrs: dict, entry: RegistryEntry) -> list[str]:
@@ -40,6 +45,14 @@ def isolation_discrepancies(attrs: dict, entry: RegistryEntry) -> list[str]:
     host = attrs.get("HostConfig", {})
     cfg = attrs.get("Config", {})
     expected = entry.config
+    workspace = entry.approved.ephemeral_workspace_mb
+    expected_tmpfs = {'/tmp': f'rw,noexec,nosuid,nodev,size={workspace}m,mode=1777'}
+    no_mounts = not any((host.get('Binds'),host.get('Mounts'),host.get('VolumesFrom'),cfg.get('Volumes')))
+    if workspace is None:
+        no_mounts = no_mounts and not host.get('Tmpfs') and not attrs.get('Mounts')
+    else:
+        no_mounts = (no_mounts and host.get('Tmpfs') == expected_tmpfs and
+            all(m.get('Type')=='tmpfs' and m.get('Destination')=='/tmp' for m in attrs.get('Mounts',[])))
     checks = {
         "CPU limit": host.get("NanoCpus") == round(expected.cpus * 1_000_000_000),
         "memory limit": host.get("Memory") == expected.memory_mb * 1024**2,
@@ -57,8 +70,7 @@ def isolation_discrepancies(attrs: dict, entry: RegistryEntry) -> list[str]:
         "init": host.get("Init") is True,
         "restart disabled": host.get("RestartPolicy", {}).get("Name") == "no",
         "non-root identity": cfg.get("User") == entry.approved.user,
-        "no mounts": not any((host.get("Binds"), host.get("Mounts"), host.get("VolumesFrom"),
-                                   host.get("Tmpfs"), attrs.get("Mounts"), cfg.get("Volumes"))),
+        "no mounts": no_mounts,
         "no published ports": not host.get("PortBindings") and not host.get("PublishAllPorts"),
         "no devices": not host.get("Devices") and not host.get("DeviceRequests"),
         "approved image": attrs.get("Image") == entry.approved.image_id,

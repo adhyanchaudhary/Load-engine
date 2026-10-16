@@ -17,7 +17,8 @@ async def _invoke(method, argument):
     async def worker():
         with anyio.CancelScope(shield=True):
             try:
-                engine = LoadEngine(get_manager(), cancelled=cancelled)
+                from guardrails.application import make_benchmark_service
+                engine = make_benchmark_service(get_manager(),cancelled=cancelled,engine_factory=LoadEngine)
                 results.append(await anyio.to_thread.run_sync(lambda: getattr(engine, method)(argument)))
             except BaseException as exc:
                 errors.append(exc)

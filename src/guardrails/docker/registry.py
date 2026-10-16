@@ -42,6 +42,12 @@ class Registry:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(name, self.path)
+            try:
+                from guardrails.persistence.indexer import ArtifactIndexer
+                ArtifactIndexer(self.directory).registry(data)
+            except Exception:
+                import logging
+                logging.warning('SQLite sandbox index unavailable; private registry retained')
         finally:
             if os.path.exists(name):
                 os.unlink(name)

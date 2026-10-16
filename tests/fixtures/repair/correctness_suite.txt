@@ -1,0 +1,14 @@
+"""Reviewed, protected correctness recipe for the local fixture."""
+import unittest
+from app import response_for_path
+
+
+class Behavior(unittest.TestCase):
+    def test_root_status(self):
+        self.assertEqual(response_for_path('/')[0], 200)
+
+    def test_root_body(self):
+        self.assertEqual(response_for_path('/')[1], b'ok\n')
+
+    def test_missing(self):
+        self.assertEqual(response_for_path('/other'), (404, b'missing\n'))
