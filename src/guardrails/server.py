@@ -12,7 +12,20 @@ from guardrails.tools.sandbox import (
     get_sandbox_logs, destroy_sandbox, get_manager,
 )
 
+from guardrails.tools.performance import (
+    prepare_test_environment, run_performance_test,
+    get_performance_results, evaluate_performance_budget,
+)
+
+from guardrails.tools.diagnostics import (
+    analyze_performance, compare_performance_tests, get_diagnostic_report, get_diagnostic_context,
+)
+
 mcp = MCPServer(SERVICE_NAME)
+for tool in (analyze_performance, compare_performance_tests, get_diagnostic_report, get_diagnostic_context):
+    mcp.tool()(tool)
+for tool in (prepare_test_environment, run_performance_test, get_performance_results, evaluate_performance_budget):
+    mcp.tool()(tool)
 mcp.tool()(health_check)
 mcp.tool()(get_system_info)
 mcp.tool()(validate_test_config)
@@ -26,6 +39,9 @@ def main() -> None:
     if cleanup.errors or cleanup.remaining_expired:
         logging.warning("Startup cleanup incomplete: %s errors, %s expired records remain",
                         len(cleanup.errors), cleanup.remaining_expired)
+    recovery = get_manager().cleanup_abandoned_runners()
+    if recovery.errors:
+        logging.warning("Abandoned runner cleanup incomplete: %s errors", len(recovery.errors))
     mcp.run(transport="stdio")
 
 

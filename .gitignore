@@ -10,3 +10,6 @@ build/
 .env
 
 .guardrails/
+
+# Local benchmark diagnostics and temporary policies
+work/

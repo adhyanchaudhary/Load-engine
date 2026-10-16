@@ -25,12 +25,13 @@ def create_options(config: SandboxConfig, approved: ApprovedImage, entry: Regist
         image=approved.image_id, entrypoint=approved.entrypoint, command=approved.command,
         user=approved.user, labels=ownership_labels(entry),
         privileged=False, cap_drop=["ALL"], security_opt=["no-new-privileges:true"],
-        read_only=True, network_disabled=True, network_mode="none",
+        read_only=True, network_disabled=entry.network_name is None, network_mode=entry.network_name or "none",
+        use_config_proxy=False, environment={},
         pids_limit=config.pids_limit, mem_limit=memory, memswap_limit=memory,
         nano_cpus=round(config.cpus * 1_000_000_000), init=True,
         restart_policy={"Name": "no"},
         volumes={}, mounts=[], ports={}, publish_all_ports=False,
-        log_config=LogConfig(type="local", config={"max-size": "1m", "max-file": "1"}),
+        log_config=LogConfig(type="local", config={"max-size": "1m", "max-file": "1", "compress": "false"}),
     )
 
 
@@ -48,7 +49,11 @@ def isolation_discrepancies(attrs: dict, entry: RegistryEntry) -> list[str]:
         "capability drop": "ALL" in (host.get("CapDrop") or []) and not host.get("CapAdd"),
         "no new privileges": "no-new-privileges:true" in (host.get("SecurityOpt") or []),
         "read-only filesystem": host.get("ReadonlyRootfs") is True,
-        "network isolation": host.get("NetworkMode") == "none" and cfg.get("NetworkDisabled") is True,
+        "network isolation": (
+            host.get("NetworkMode") in (entry.network_name, entry.network_id)
+            and cfg.get("NetworkDisabled", False) is False
+            and set(attrs.get("NetworkSettings", {}).get("Networks", {})) == {entry.network_name}
+        ) if entry.network_name else (host.get("NetworkMode") == "none" and cfg.get("NetworkDisabled") is True),
         "init": host.get("Init") is True,
         "restart disabled": host.get("RestartPolicy", {}).get("Name") == "no",
         "non-root identity": cfg.get("User") == entry.approved.user,

@@ -16,6 +16,11 @@ class SandboxConfig(BaseModel):
 
 class ApprovedImage(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    application_identity: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
+    application_version: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
+    commit_identifier: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
+    dataset_id: str | None = Field(default=None, max_length=128, pattern=r"^[a-zA-Z0-9._:-]+$")
+    application_port: int | None = Field(default=None, ge=1024, le=65535)
     image_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     user: str = Field(default="65534:65534", pattern=r"^[1-9][0-9]*:[1-9][0-9]*$")
     entrypoint: list[str] = Field(min_length=1, max_length=32)
@@ -29,8 +34,18 @@ class ApprovedImage(BaseModel):
         return value
 
 
+class PerformancePolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    image: ApprovedImage
+    cpus: float = Field(default=0.5, ge=0.1, le=2, allow_inf_nan=False)
+    memory_mb: int = Field(default=256, ge=128, le=1024)
+    pids_limit: int = Field(default=64, ge=16, le=128)
+    concurrency: int = Field(default=2, ge=1, le=4)
+
+
 class ImagePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    performance: PerformancePolicy | None = None
     images: dict[str, ApprovedImage] = Field(default_factory=dict, max_length=100)
 
     @field_validator("images")
@@ -48,6 +63,12 @@ class RegistryEntry(BaseModel):
     expires_at: datetime
     owner: str
     nonce: str
+    network_name: str | None = None
+    network_id: str | None = None
+    runner_name: str | None = None
+    runner_id: str | None = None
+    runner_nonce: str | None = None
+    prepared: bool = False
     config: SandboxConfig
     approved: ApprovedImage
 

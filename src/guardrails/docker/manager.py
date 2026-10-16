@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from docker.errors import DockerException, NotFound
-from filelock import Timeout as LockTimeout
+from filelock import FileLock, Timeout as LockTimeout
 from pydantic import ValidationError
 from requests.exceptions import RequestException
 
@@ -128,6 +128,15 @@ class SandboxManager:
         else:
             container = client.containers.get(entry.container_id)
             self._verify_owner(container, entry)
+        if entry.network_id:
+            from guardrails.docker.networking import verify_network
+            network = verify_network(client.networks.get(entry.network_id), entry)
+            allowed = {entry.container_id}
+            if entry.runner_id:
+                allowed.add(entry.runner_id)
+            members = set((network.attrs.get("Containers") or {}).keys())
+            if members - allowed:
+                raise SandboxError("network_membership", "Unexpected container on the owned test network")
         return entry, container
 
     def _require_unexpired(self, entry: RegistryEntry) -> None:
@@ -195,6 +204,11 @@ class SandboxManager:
                 )
                 data.entries[entry.sandbox_id] = entry
                 self.registry.save(data)
+                if approved.application_port is not None:
+                    from guardrails.docker.networking import ensure_network
+                    entry.network_name = "guardrails-" + entry.sandbox_id
+                    self.registry.save(data)
+                    ensure_network(self, client, data, entry)
                 # A timed-out create can still succeed in Docker. Keep its durable
                 # intent for cleanup rather than losing ownership information.
                 container = client.containers.create(**create_options(config, approved, entry))
@@ -204,6 +218,8 @@ class SandboxManager:
                 snapshot = self._snapshot(container, entry, capabilities)
                 if not snapshot.limits.verified:
                     container.remove(force=True, v=False)
+                    from guardrails.docker.networking import cleanup_resources
+                    cleanup_resources(self, client, data, entry)
                     del data.entries[entry.sandbox_id]
                     self.registry.save(data)
                     raise SandboxError("isolation_unverified", "Daemon inspection did not confirm mandatory isolation: " + ", ".join(snapshot.limits.discrepancies))
@@ -280,6 +296,8 @@ class SandboxManager:
             container.remove(force=True, v=False)
         except NotFound:
             pass  # Already removed externally; registry still needs cleanup.
+        from guardrails.docker.networking import cleanup_resources
+        cleanup_resources(self, client, data, data.entries[sandbox_id])
         del data.entries[sandbox_id]
         self.registry.save(data)
         return SandboxResult(ok=True, destroyed=True, already_absent=False)
@@ -292,6 +310,32 @@ class SandboxManager:
                 return self._destroy(None, data, sandbox_id)
             with self.client_factory() as client:
                 return self._destroy(client, data, sandbox_id)
+
+    def cleanup_abandoned_runners(self) -> CleanupResult:
+        """Recover durable ephemeral intents, leaving other processes' active tests alone."""
+        from guardrails.docker.networking import cleanup_runner
+        result = CleanupResult()
+        try:
+            with self.registry.transaction() as data:
+                ids = [key for key, entry in data.entries.items() if entry.runner_name]
+            for sandbox_id in ids[:100]:
+                try:
+                    with FileLock(str(self.registry.directory / f"test-{sandbox_id}.lock"), timeout=0):
+                        with self.registry.transaction() as data, self.client_factory() as client:
+                            entry = data.entries.get(sandbox_id)
+                            if entry and entry.runner_name:
+                                result.examined += 1
+                                cleanup_runner(self, client, data, entry)
+                                entry.prepared = False
+                                self.registry.save(data)
+                                result.destroyed += 1
+                except LockTimeout:
+                    continue
+                except HANDLED as exc:
+                    result.errors.append(error_result(exc))
+        except HANDLED as exc:
+            result.errors.append(error_result(exc))
+        return result
 
     def cleanup_expired(self, limit: int = 20) -> CleanupResult:
         result = CleanupResult()
